@@ -36,7 +36,12 @@ public class RedisScenarioController {
                 "rate limit",
                 "idempotency",
                 "cache aside",
-                "spring cache annotation"
+                "spring cache annotation",
+                "cache penetration guard",
+                "hot key mutex rebuild",
+                "randomized ttl",
+                "pipeline",
+                "lua inventory deduction"
         ));
     }
 

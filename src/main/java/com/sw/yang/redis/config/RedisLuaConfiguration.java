@@ -37,4 +37,26 @@ public class RedisLuaConfiguration {
                 """);
         return script;
     }
+
+    @Bean
+    public RedisScript<Long> redisDeductStockScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setResultType(Long.class);
+        script.setScriptText("""
+                local current = redis.call('get', KEYS[1])
+                if current == false then
+                    return -1
+                end
+                local stock = tonumber(current)
+                local amount = tonumber(ARGV[1])
+                if amount == nil or amount <= 0 then
+                    return -3
+                end
+                if stock < amount then
+                    return -2
+                end
+                return redis.call('decrby', KEYS[1], amount)
+                """);
+        return script;
+    }
 }

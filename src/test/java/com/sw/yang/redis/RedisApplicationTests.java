@@ -18,6 +18,9 @@ class RedisApplicationTests {
     void redisKeysShouldBeNamespaced() {
         assertThat(RedisKeys.userProfile(1001)).isEqualTo("learn:redis:string:user-profile:1001");
         assertThat(RedisKeys.cache("product", "sku 1001")).isEqualTo("learn:redis:cache:product:sku-1001");
+        assertThat(RedisKeys.hotProduct("sku hot")).isEqualTo("learn:redis:cache:hot-product:sku-hot");
+        assertThat(RedisKeys.productStock("sku stock")).isEqualTo("learn:redis:inventory:stock:sku-stock");
+        assertThat(RedisKeys.pipelineValue("stage 5", 2)).isEqualTo("learn:redis:pipeline:stage-5:2");
     }
 
     @Test

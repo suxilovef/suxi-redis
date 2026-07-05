@@ -7,16 +7,19 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.sw.yang.redis.scenario.cache.CatalogCacheService;
+import com.sw.yang.redis.scenario.cache.RedisCacheProtectionService;
 import com.sw.yang.redis.scenario.cache.RedisCacheAsideService;
 import com.sw.yang.redis.scenario.collection.RedisCollectionService;
 import com.sw.yang.redis.scenario.common.RedisKeys;
 import com.sw.yang.redis.scenario.geo.RedisGeoService;
 import com.sw.yang.redis.scenario.hash.RedisHashService;
 import com.sw.yang.redis.scenario.idempotency.RedisIdempotencyService;
+import com.sw.yang.redis.scenario.inventory.RedisInventoryService;
 import com.sw.yang.redis.scenario.lock.RedisDistributedLockService;
 import com.sw.yang.redis.scenario.model.ProductDetail;
 import com.sw.yang.redis.scenario.model.StoreLocation;
 import com.sw.yang.redis.scenario.model.UserProfile;
+import com.sw.yang.redis.scenario.pipeline.RedisPipelineService;
 import com.sw.yang.redis.scenario.probabilistic.RedisProbabilisticService;
 import com.sw.yang.redis.scenario.pubsub.RedisPubSubService;
 import com.sw.yang.redis.scenario.ratelimit.RedisRateLimiter;
@@ -37,7 +40,10 @@ public class RedisScenarioFacade {
     private final RedisRateLimiter rateLimiter;
     private final RedisIdempotencyService idempotencyService;
     private final RedisCacheAsideService cacheAsideService;
+    private final RedisCacheProtectionService cacheProtectionService;
     private final CatalogCacheService catalogCacheService;
+    private final RedisPipelineService pipelineService;
+    private final RedisInventoryService inventoryService;
     private final RedisPubSubService pubSubService;
 
     public RedisScenarioFacade(
@@ -51,7 +57,10 @@ public class RedisScenarioFacade {
             RedisRateLimiter rateLimiter,
             RedisIdempotencyService idempotencyService,
             RedisCacheAsideService cacheAsideService,
+            RedisCacheProtectionService cacheProtectionService,
             CatalogCacheService catalogCacheService,
+            RedisPipelineService pipelineService,
+            RedisInventoryService inventoryService,
             RedisPubSubService pubSubService) {
         this.stringService = stringService;
         this.hashService = hashService;
@@ -63,7 +72,10 @@ public class RedisScenarioFacade {
         this.rateLimiter = rateLimiter;
         this.idempotencyService = idempotencyService;
         this.cacheAsideService = cacheAsideService;
+        this.cacheProtectionService = cacheProtectionService;
         this.catalogCacheService = catalogCacheService;
+        this.pipelineService = pipelineService;
+        this.inventoryService = inventoryService;
         this.pubSubService = pubSubService;
     }
 
@@ -122,6 +134,14 @@ public class RedisScenarioFacade {
                 new ProductDetail("sku-2001", "Annotation Cache Product", BigDecimal.valueOf(199.00))
         );
         result.put("cacheAnnotation", catalogCacheService.getProduct(saved.sku()));
+        result.put("cacheProtection", cacheProtectionService.runCacheProtectionDemo());
+
+        result.put("pipelineWrite", pipelineService.writeSampleValues("stage5", 5, Duration.ofMinutes(5)));
+        result.put("pipelineRead", pipelineService.readSampleValues("stage5", 5));
+
+        inventoryService.initializeStock("sku-stock-1", 10, Duration.ofMinutes(10));
+        result.put("inventoryDeductSuccess", inventoryService.deduct("sku-stock-1", 3));
+        result.put("inventoryDeductInsufficient", inventoryService.deduct("sku-stock-1", 20));
         result.put("pubSubReceivers", pubSubService.publish("redis scenario broadcast"));
 
         return new RedisScenarioResponse(result);

@@ -68,6 +68,18 @@ public final class RedisKeys {
         return APP + ":cache:" + clean(name) + ':' + clean(id);
     }
 
+    public static String hotProduct(String sku) {
+        return APP + ":cache:hot-product:" + clean(sku);
+    }
+
+    public static String productStock(String sku) {
+        return APP + ":inventory:stock:" + clean(sku);
+    }
+
+    public static String pipelineValue(String batch, int index) {
+        return APP + ":pipeline:" + clean(batch) + ':' + index;
+    }
+
     private static String clean(String value) {
         String text = Objects.requireNonNull(value, "value must not be null").trim();
         if (text.isEmpty()) {
