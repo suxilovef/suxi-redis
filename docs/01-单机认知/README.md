@@ -1,0 +1,683 @@
+# Redis 单机认知
+
+## 1. 这份文档解决什么问题
+
+你已经知道 Redis 可以存取数据，但如果要作为开发组长负责 Redis 的部署、容量评估和故障排查，单机 Redis 需要从下面几个角度重新理解：
+
+- Redis 进程是如何处理请求的。
+- 数据存在内存里，但落盘机制如何保证可恢复。
+- 为什么 Redis 会变慢、阻塞、内存暴涨。
+- 哪些配置会直接影响线上稳定性。
+- 出问题时应该先看哪些指标和命令。
+
+单机认知是后续学习主从复制、Sentinel、Cluster 和线上排查的基础。
+
+## 2. 需要准备什么环境
+
+### 2.1 基础环境
+
+建议准备两套环境：本地快速实验环境和接近线上行为的 Linux 环境。
+
+| 环境 | 用途 | 建议 |
+| --- | --- | --- |
+| Windows + Docker Desktop | 快速启动 Redis、做命令实验 | 必备 |
+| WSL2 / Linux 虚拟机 / 云服务器 | 熟悉 Linux 下 Redis 部署、日志、配置和进程管理 | 推荐 |
+| redis-cli | 执行命令、观察状态、排查问题 | 必备 |
+| Java 17+ | 编写客户端实验代码 | 必备 |
+| Maven / Gradle | 构建 Java demo | 必备 |
+| Redis Insight | 可视化查看 key、内存、慢查询 | 可选 |
+
+如果你后面要练集群，Docker Compose 会非常有用。
+
+### 2.2 推荐版本
+
+学习时建议使用 Redis 7.x。Redis 6.x 之后引入了多 IO 线程能力，Redis 7.x 是当前更适合作为学习和实践基线的版本。
+
+确认版本：
+
+```bash
+redis-server --version
+redis-cli --version
+```
+
+Docker 启动单机 Redis：
+
+```bash
+docker run --name redis-single \
+  -p 6379:6379 \
+  -d redis:7
+```
+
+进入 redis-cli：
+
+```bash
+docker exec -it redis-single redis-cli
+```
+
+检查服务：
+
+```bash
+ping
+info server
+info memory
+```
+
+### 2.3 推荐目录结构
+
+后续实验建议单独准备一个 Redis 学习目录：
+
+```text
+redis-lab/
+  single/
+    redis.conf
+    data/
+    logs/
+  sentinel/
+  cluster/
+  java-demo/
+```
+
+单机阶段至少要保留：
+
+- `redis.conf`：用于反复修改配置。
+- `data/`：观察 `dump.rdb`、`appendonly.aof` 等持久化文件。
+- `logs/`：观察启动日志、异常日志。
+
+### 2.4 Linux 环境准备项
+
+如果使用 Linux，重点关注这些系统配置：
+
+```bash
+ulimit -n
+sysctl vm.overcommit_memory
+cat /sys/kernel/mm/transparent_hugepage/enabled
+```
+
+建议理解它们的意义：
+
+| 配置 | 为什么重要 |
+| --- | --- |
+| `ulimit -n` | Redis 连接数受文件描述符限制影响 |
+| `vm.overcommit_memory` | RDB/AOF rewrite 需要 fork，内存策略会影响 fork 成功率 |
+| Transparent Huge Pages | 可能导致 Redis 延迟抖动，线上通常建议关闭 |
+| `tcp-backlog` | 影响高并发连接积压队列 |
+
+这些不需要一开始全部调优，但必须知道它们会影响 Redis 稳定性。
+
+## 3. 单机 Redis 的核心认知
+
+### 3.1 Redis 是一个内存数据库
+
+Redis 的主要数据在内存中，磁盘主要用于持久化恢复，不是每次读写都访问磁盘。
+
+这带来几个结果：
+
+- 读写速度快。
+- 容量受内存限制明显。
+- 大 key、热 key、内存碎片会直接影响稳定性。
+- 宕机恢复依赖 RDB/AOF 策略。
+
+你做容量规划时，不应该只问“有多少 key”，还要问：
+
+- 每类 key 平均多大？
+- 是否有 list/hash/zset 这种集合类型？
+- TTL 分布是否集中？
+- 峰值写入量多大？
+- 是否允许数据丢失几秒？
+
+### 3.2 Redis 单线程模型的准确理解
+
+常见说法是“Redis 是单线程”，但更准确的说法是：
+
+- Redis 处理命令的主执行路径主要是单线程。
+- 网络 IO、持久化、异步删除、AOF fsync 等部分可以由后台线程或子进程处理。
+- Redis 6 之后支持多 IO 线程，但命令执行仍然不是多线程并发修改数据。
+
+这意味着：
+
+- 单个慢命令会阻塞后续命令。
+- 大 key 删除、复杂 Lua、范围查询过大，都可能造成延迟。
+- Redis 的性能瓶颈经常不是锁竞争，而是单线程执行时间、网络、内存和系统调用。
+
+### 3.3 一条命令的大致执行流程
+
+一条 Redis 命令通常经历：
+
+```text
+客户端发送请求
+  -> Redis 网络层读取请求
+  -> 解析协议 RESP
+  -> 查询命令表
+  -> 执行命令逻辑
+  -> 修改内存数据结构
+  -> 记录 AOF / 传播给从节点
+  -> 返回响应
+```
+
+排查问题时要判断慢在哪里：
+
+- 客户端连接池耗尽。
+- 网络延迟高。
+- Redis 命令执行慢。
+- AOF fsync 抖动。
+- fork 导致阻塞。
+- CPU 被复杂命令打满。
+- 内存不足触发淘汰或系统 swap。
+
+## 4. Redis 数据结构认知
+
+### 4.1 常用类型和真实用途
+
+| 类型 | 常见场景 | 风险点 |
+| --- | --- | --- |
+| string | 缓存对象、计数器、分布式锁 token | value 过大、序列化不统一 |
+| hash | 对象字段缓存、购物车 | field 过多形成大 key |
+| list | 简单队列、时间线 | 阻塞操作和长度膨胀 |
+| set | 去重、标签、集合关系 | 大集合求交并差可能很慢 |
+| zset | 排行榜、延迟队列、权重排序 | 范围查询过大、成员过多 |
+| bitmap | 签到、活跃标记 | offset 过大导致内存突增 |
+| hyperloglog | UV 估算 | 只能估算，不能取明细 |
+| stream | 消息流、消费组 | 未确认消息和积压管理 |
+
+### 4.2 需要重点理解的底层结构
+
+不要求一开始读源码，但需要知道这些结构会影响性能：
+
+| 底层结构 | 影响 |
+| --- | --- |
+| SDS | Redis 字符串不是 C 原生字符串，支持二进制安全和容量预分配 |
+| dict | key 空间、hash 类型都大量依赖哈希表 |
+| skiplist | zset 排序能力的重要实现结构 |
+| listpack | 小对象紧凑编码，节省内存 |
+| quicklist | list 的底层实现，兼顾链表和紧凑存储 |
+| intset | 小整数 set 的紧凑编码 |
+
+工程上你要记住：同一个 Redis 类型，在不同数据规模下可能使用不同内部编码。
+
+查看编码：
+
+```bash
+object encoding mykey
+memory usage mykey
+```
+
+## 5. 持久化机制
+
+### 5.1 RDB
+
+RDB 是某个时间点的内存快照，生成 `dump.rdb` 文件。
+
+特点：
+
+- 文件紧凑，适合备份和全量恢复。
+- 恢复速度通常较快。
+- 两次快照之间的数据可能丢失。
+- 生成 RDB 时 Redis 会 fork 子进程，fork 可能带来延迟。
+
+关键配置：
+
+```conf
+save 900 1
+save 300 10
+save 60 10000
+dir /data
+dbfilename dump.rdb
+```
+
+常用命令：
+
+```bash
+bgsave
+lastsave
+info persistence
+```
+
+### 5.2 AOF
+
+AOF 通过追加写命令日志恢复数据。
+
+特点：
+
+- 数据安全性通常高于 RDB。
+- 文件可能比 RDB 大。
+- 需要 AOF rewrite 压缩日志。
+- `appendfsync` 策略会影响性能和数据安全。
+
+关键配置：
+
+```conf
+appendonly yes
+appendfsync everysec
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+```
+
+常见 `appendfsync` 策略：
+
+| 策略 | 含义 | 取舍 |
+| --- | --- | --- |
+| `always` | 每次写都刷盘 | 最安全，性能最差 |
+| `everysec` | 每秒刷盘 | 常用，最多丢约 1 秒数据 |
+| `no` | 交给操作系统 | 性能好，但数据丢失风险更高 |
+
+### 5.3 混合持久化
+
+Redis 支持 AOF rewrite 文件前半部分使用 RDB 格式，后半部分追加 AOF 命令。
+
+关键配置：
+
+```conf
+aof-use-rdb-preamble yes
+```
+
+生产环境常见选择：
+
+- 缓存型业务：可以只开 RDB，甚至不开持久化，但要接受重建成本。
+- 重要状态型业务：建议开启 AOF everysec，并评估 RDB 备份。
+- 强一致数据：不要单纯依赖 Redis，当 Redis 只是缓存时以数据库为准。
+
+## 6. 过期删除和内存淘汰
+
+### 6.1 过期删除
+
+Redis 不是每个 key 到期就立刻删除，主要依赖：
+
+- 惰性删除：访问 key 时发现过期再删除。
+- 定期删除：后台周期性抽样删除过期 key。
+
+风险：
+
+- 大量 key 同一时间过期，会造成 CPU 抖动。
+- 过期 key 没被访问时，可能短时间继续占用内存。
+
+业务建议：
+
+- TTL 增加随机值，避免集中失效。
+- 大批量缓存预热时，不要设置完全相同的过期时间。
+
+### 6.2 内存淘汰
+
+当 Redis 达到 `maxmemory` 后，会根据 `maxmemory-policy` 淘汰 key。
+
+常见策略：
+
+| 策略 | 含义 | 适合场景 |
+| --- | --- | --- |
+| `noeviction` | 不淘汰，写入报错 | 默认保守策略 |
+| `allkeys-lru` | 所有 key 中淘汰最近最少使用 | 通用缓存 |
+| `volatile-lru` | 只淘汰设置 TTL 的 key | 混合缓存与重要数据 |
+| `allkeys-lfu` | 所有 key 中淘汰低频访问 | 热点相对稳定的缓存 |
+| `volatile-ttl` | 优先淘汰快过期的 key | 依赖 TTL 的缓存 |
+
+关键配置：
+
+```conf
+maxmemory 2gb
+maxmemory-policy allkeys-lru
+```
+
+工程原则：
+
+- 作为缓存使用时，一定要显式配置 `maxmemory`。
+- 不要让 Redis 把机器内存吃满后交给操作系统处理。
+- `noeviction` 下写入失败需要业务能处理异常。
+
+## 7. 单机常见性能风险
+
+### 7.1 大 key
+
+大 key 指 value 很大，或者集合元素很多的 key。
+
+风险：
+
+- 网络传输慢。
+- 删除阻塞。
+- 迁移困难。
+- 主从同步压力大。
+- 集群迁槽成本高。
+
+排查：
+
+```bash
+redis-cli --bigkeys
+memory usage key
+strlen key
+hlen key
+llen key
+scard key
+zcard key
+```
+
+处理建议：
+
+- 大对象拆分。
+- 大集合分片。
+- 删除大 key 使用 `unlink` 而不是 `del`。
+- 控制单 key 的最大元素数量。
+
+### 7.2 热 key
+
+热 key 指访问频率远高于其他 key 的 key。
+
+风险：
+
+- 单线程 CPU 被打满。
+- 单节点流量过大。
+- 业务超时集中出现。
+
+处理建议：
+
+- 本地缓存。
+- 多副本读。
+- 热 key 拆分。
+- 提前识别高峰活动 key。
+
+### 7.3 慢命令
+
+典型慢命令来源：
+
+- `keys *`
+- 大范围 `zrange`
+- 大集合 `smembers`
+- 复杂 Lua 脚本。
+- 大 key 删除。
+- 一次性返回过多数据。
+
+排查：
+
+```bash
+slowlog get 10
+slowlog len
+latency latest
+latency doctor
+```
+
+替代建议：
+
+- 用 `scan` 替代 `keys`。
+- 分批读取。
+- 控制 Lua 脚本执行时间。
+- 使用 `unlink` 异步释放大 key。
+
+## 8. 单机排查命令清单
+
+### 8.1 基础状态
+
+```bash
+info server
+info clients
+info memory
+info stats
+info persistence
+info commandstats
+```
+
+重点看：
+
+| 指标 | 说明 |
+| --- | --- |
+| `used_memory_human` | Redis 已使用内存 |
+| `used_memory_rss_human` | 操作系统层面实际占用 |
+| `mem_fragmentation_ratio` | 内存碎片率 |
+| `connected_clients` | 当前连接数 |
+| `blocked_clients` | 阻塞客户端数 |
+| `total_commands_processed` | 总命令数 |
+| `instantaneous_ops_per_sec` | 当前 QPS |
+| `latest_fork_usec` | 最近一次 fork 耗时 |
+| `rdb_last_bgsave_status` | 最近 RDB 状态 |
+| `aof_last_bgrewrite_status` | 最近 AOF rewrite 状态 |
+
+### 8.2 客户端排查
+
+```bash
+client list
+client info
+client kill id <id>
+```
+
+重点看：
+
+- 哪些客户端连接数异常。
+- 是否有客户端长时间阻塞。
+- 是否有客户端输出缓冲区过大。
+
+### 8.3 内存排查
+
+```bash
+memory stats
+memory doctor
+memory usage key
+dbsize
+scan 0 count 100
+```
+
+注意：`dbsize` 只返回 key 数量，不代表内存大小。
+
+### 8.4 延迟排查
+
+```bash
+slowlog get 20
+latency latest
+latency history command
+latency doctor
+```
+
+排查顺序建议：
+
+1. 先看业务是否只有 Redis 慢，还是整体链路都慢。
+2. 看 `slowlog` 是否有慢命令。
+3. 看 `latency` 是否有 fork、AOF、expire 等事件。
+4. 看 `info memory` 是否内存紧张或碎片严重。
+5. 看客户端连接池是否耗尽。
+
+## 9. 必做实验
+
+### 9.1 启动与配置实验
+
+目标：理解 Redis 进程、配置文件、日志和数据目录。
+
+步骤：
+
+```bash
+redis-server redis.conf
+redis-cli ping
+redis-cli info server
+```
+
+观察：
+
+- Redis 监听端口。
+- 日志输出。
+- `dir` 配置指向的数据目录。
+- `protected-mode`、`bind`、`requirepass` 的影响。
+
+### 9.2 RDB 实验
+
+目标：理解快照生成和恢复。
+
+步骤：
+
+```bash
+set k1 v1
+bgsave
+lastsave
+```
+
+然后重启 Redis，观察数据是否恢复。
+
+需要回答：
+
+- `bgsave` 和 `save` 有什么区别？
+- 为什么 `save` 在线上危险？
+- RDB 可能丢多少数据？
+
+### 9.3 AOF 实验
+
+目标：理解追加日志、刷盘策略和 rewrite。
+
+配置：
+
+```conf
+appendonly yes
+appendfsync everysec
+```
+
+步骤：
+
+```bash
+set a 1
+set b 2
+bgrewriteaof
+info persistence
+```
+
+需要观察：
+
+- AOF 文件如何变化。
+- rewrite 后文件是否变小。
+- `aof_last_bgrewrite_status` 是否成功。
+
+### 9.4 大 key 实验
+
+目标：理解大 key 对内存和命令耗时的影响。
+
+示例：
+
+```bash
+lpush biglist 1 2 3 4 5
+llen biglist
+memory usage biglist
+```
+
+进阶实验可以写脚本插入大量元素，再分别测试：
+
+```bash
+del biglist
+unlink biglist
+```
+
+比较两者对延迟的影响。
+
+### 9.5 慢查询实验
+
+目标：知道如何发现慢命令。
+
+配置：
+
+```conf
+slowlog-log-slower-than 10000
+slowlog-max-len 128
+```
+
+执行可能较慢的命令后查看：
+
+```bash
+slowlog get 10
+```
+
+需要回答：
+
+- 慢查询记录的是服务端执行时间，是否包含网络耗时？
+- 如果业务觉得慢，但 `slowlog` 没记录，可能慢在哪里？
+
+## 10. Java 工程侧需要关注什么
+
+即使单机 Redis 本身没问题，Java 客户端也可能制造问题。
+
+重点检查：
+
+| 项目 | 风险 |
+| --- | --- |
+| 连接池最大连接数 | 太小会排队，太大会压垮 Redis |
+| 连接超时 | 太长会拖垮业务线程 |
+| 读写超时 | 太短误判失败，太长放大故障 |
+| 序列化方式 | JSON/JDK 序列化可能导致 value 过大 |
+| key 命名 | 缺少命名空间会冲突，难排查 |
+| TTL 策略 | 大量 key 同时过期会抖动 |
+| 批量操作 | 一次返回过多数据会阻塞 |
+
+建议 Java demo 至少包含：
+
+- string/hash/zset 基础操作。
+- TTL 随机化。
+- Pipeline 批量写入。
+- Lua 原子操作。
+- `unlink` 删除大 key。
+- Redis 超时和异常处理。
+
+## 11. 单机配置最低认知清单
+
+你至少要看懂这些配置：
+
+```conf
+bind 0.0.0.0
+protected-mode yes
+port 6379
+requirepass your-password
+daemonize yes
+dir /data/redis
+logfile /var/log/redis/redis.log
+databases 16
+maxclients 10000
+maxmemory 2gb
+maxmemory-policy allkeys-lru
+save 900 1
+appendonly yes
+appendfsync everysec
+slowlog-log-slower-than 10000
+slowlog-max-len 128
+```
+
+生产环境尤其不能忽略：
+
+- 不要裸奔暴露公网。
+- 必须设置访问控制。
+- 明确 `maxmemory`。
+- 明确持久化策略。
+- 日志和数据目录要可观测、可备份。
+- 配置文件要纳入版本管理或配置管理。
+
+## 12. 本阶段过关标准
+
+完成单机认知后，你应该能回答这些问题：
+
+1. Redis 为什么快？
+2. Redis 真的是完全单线程吗？
+3. 一个慢命令为什么会影响其他请求？
+4. RDB 和 AOF 各自解决什么问题？
+5. `appendfsync everysec` 最多可能丢多少数据？
+6. 为什么线上不建议执行 `keys *`？
+7. `del` 和 `unlink` 删除大 key 的区别是什么？
+8. `maxmemory-policy` 不同策略怎么选？
+9. 业务 Redis 超时，如何判断是 Redis 慢还是客户端慢？
+10. `info memory`、`slowlog`、`latency` 分别适合排查什么？
+
+如果这些问题能讲清楚，就可以进入第 2 个模块：高可用部署，也就是主从复制和 Sentinel。
+
+## 13. 后续文档规划
+
+建议 5 份文档按下面方式组织：
+
+```text
+docs/
+  01-单机认知/
+    README.md
+  02-高可用部署/
+    README.md
+  03-集群能力/
+    README.md
+  04-线上问题排查/
+    README.md
+  05-Java接入与工程实践/
+    README.md
+```
+
+每份文档都建议包含：
+
+- 学习目标。
+- 环境准备。
+- 核心原理。
+- 关键配置。
+- 必做实验。
+- 排查命令。
+- 过关问题。
