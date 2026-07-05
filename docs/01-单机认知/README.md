@@ -80,7 +80,7 @@ redis-lab/
 单机阶段至少要保留：
 
 - `redis.conf`：用于反复修改配置。
-- `data/`：观察 `dump.rdb`、`appendonly.aof` 等持久化文件。
+- `data/`：观察 `dump.rdb`、`appendonly.aof`、Redis 7 多部分 AOF 的 `appendonlydir/` 等持久化文件。
 - `logs/`：观察启动日志、异常日志。
 
 ### 2.4 Linux 环境准备项
@@ -452,6 +452,7 @@ scan 0 count 100
 ```
 
 注意：`dbsize` 只返回 key 数量，不代表内存大小。
+`scan` 返回的是游标，需要按返回的 cursor 循环执行，直到 cursor 回到 `0` 才算扫描完成；不要把一次 `scan 0 count 100` 理解成全量扫描。
 
 ### 8.4 延迟排查
 
@@ -614,7 +615,9 @@ bind 0.0.0.0
 protected-mode yes
 port 6379
 requirepass your-password
-daemonize yes
+daemonize no
+supervised systemd
+pidfile /run/redis/redis-6379.pid
 dir /data/redis
 logfile /var/log/redis/redis.log
 databases 16
@@ -623,15 +626,18 @@ maxmemory 2gb
 maxmemory-policy allkeys-lru
 save 900 1
 appendonly yes
+appenddirname appendonlydir
 appendfsync everysec
 slowlog-log-slower-than 10000
 slowlog-max-len 128
 ```
 
+如果不用 systemd 托管，而是手工让 Redis 自己转后台运行，才会把 `daemonize` 改成 `yes`，并去掉 `supervised systemd`。学习部署文档采用 systemd 托管，所以推荐保持 `daemonize no`。
+
 生产环境尤其不能忽略：
 
 - 不要裸奔暴露公网。
-- 必须设置访问控制。
+- 必须设置访问控制。Redis 6+ 生产环境建议优先使用 ACL 创建具名用户，并限制可执行命令和可访问 key 前缀。
 - 明确 `maxmemory`。
 - 明确持久化策略。
 - 日志和数据目录要可观测、可备份。

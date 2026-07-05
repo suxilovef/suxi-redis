@@ -375,7 +375,8 @@ ens160
 
 ```bash
 ls /etc/netplan
-sudo cp /etc/netplan/*.yaml /etc/netplan/backup-before-redis.yaml
+sudo mkdir -p /root/netplan-backup
+sudo cp -a /etc/netplan/*.yaml /root/netplan-backup/
 ```
 
 命令说明：
@@ -383,7 +384,10 @@ sudo cp /etc/netplan/*.yaml /etc/netplan/backup-before-redis.yaml
 | 命令 | 为什么执行 | 执行后的影响 |
 | --- | --- | --- |
 | `ls /etc/netplan` | 查看当前 netplan 配置文件名。 | 会列出一个或多个 `.yaml` 文件，确认要修改哪个文件。 |
-| `sudo cp /etc/netplan/*.yaml /etc/netplan/backup-before-redis.yaml` | 修改网络前先备份，防止配置错误导致断网后无法恢复。 | 在 `/etc/netplan` 下生成备份文件；如果网络配置写错，可以从这个文件恢复。 |
+| `sudo mkdir -p /root/netplan-backup` | 创建 netplan 备份目录。 | 备份文件不会继续留在 `/etc/netplan` 中被 netplan 当作有效配置读取。 |
+| `sudo cp -a /etc/netplan/*.yaml /root/netplan-backup/` | 修改网络前先备份，防止配置错误导致断网后无法恢复。 | 在 `/root/netplan-backup` 下保留原始配置；如果网络配置写错，可以从这里恢复。 |
+
+不要把备份文件放在 `/etc/netplan` 目录下并继续使用 `.yaml` 后缀。netplan 会读取该目录里的 YAML 文件，旧配置和新配置同时存在时容易造成路由、DNS 或网卡配置冲突。
 
 ### 6.3 修改 netplan
 
@@ -595,6 +599,22 @@ echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
 
 学习阶段可以先临时关闭。后面如果你要模拟生产部署，再把它写入 systemd 或启动脚本。
 
+### 7.4 TCP backlog 上限
+
+Redis 配置里的 `tcp-backlog` 会受到 Linux 内核 `net.core.somaxconn` 上限影响。学习环境可以先查看当前值：
+
+```bash
+sysctl net.core.somaxconn
+```
+
+命令说明：
+
+| 命令 | 用来确认什么 | 正常结果 |
+| --- | --- | --- |
+| `sysctl net.core.somaxconn` | 查看系统允许的监听队列最大值。 | 应不小于 Redis 配置里的 `tcp-backlog`；如果小于该值，Redis 的实际 backlog 会被内核上限截断。 |
+
+如果后续要模拟高并发连接，可以再通过 `/etc/sysctl.d/99-redis.conf` 调整它。单机入门阶段先理解它和 `tcp-backlog` 的关系即可。
+
 ## 8. 安装 Redis
 
 学习部署建议使用源码安装，这样你能清楚 Redis 的二进制文件、配置文件、数据目录和日志目录分别在哪里。
@@ -805,6 +825,7 @@ rdbchecksum yes
 
 appendonly yes
 appendfilename "appendonly.aof"
+appenddirname "appendonlydir"
 appendfsync everysec
 no-appendfsync-on-rewrite no
 auto-aof-rewrite-percentage 100
@@ -836,6 +857,7 @@ requirepass Redis@123456
 | `dir /data/redis/6379` | 指定数据目录。 | RDB/AOF 文件会写到这里；目录必须允许 `redis-svc` 写入。 |
 | `save ...` | 配置 RDB 自动快照规则。 | 满足写入次数和时间条件后触发后台保存。 |
 | `appendonly yes` | 开启 AOF 持久化。 | 每次写命令会进入 AOF 流程，提升数据恢复能力，但增加磁盘写入。 |
+| `appenddirname "appendonlydir"` | 指定 Redis 7 多部分 AOF 目录名。 | AOF base、incremental、manifest 等文件会放在 `/data/redis/6379/appendonlydir` 下。 |
 | `appendfsync everysec` | AOF 每秒刷盘。 | 性能和数据安全的折中；最多可能丢约 1 秒数据。 |
 | `maxmemory 512mb` | 限制 Redis 最大可用内存。 | 防止学习虚拟机内存被 Redis 吃满。 |
 | `maxmemory-policy allkeys-lru` | 内存满时按 LRU 淘汰键。 | 所有 key 都可能被淘汰，适合理解缓存型 Redis 的行为。 |
@@ -893,8 +915,9 @@ User=redis-svc
 Group=redis-svc
 RuntimeDirectory=redis
 RuntimeDirectoryMode=0755
+Environment=REDISCLI_AUTH=Redis@123456
 ExecStart=/usr/local/redis/bin/redis-server /etc/redis/redis-6379.conf --supervised systemd --daemonize no
-ExecStop=/usr/local/redis/bin/redis-cli --no-auth-warning -a Redis@123456 -p 6379 shutdown
+ExecStop=/usr/local/redis/bin/redis-cli --no-auth-warning -p 6379 shutdown
 Restart=always
 RestartSec=3
 LimitNOFILE=100000
@@ -916,6 +939,7 @@ WantedBy=multi-user.target
 | `Type=notify` | systemd 等 Redis 主动通知“我启动好了”。 | Redis 必须编译 systemd 支持，并配置 `supervised systemd`。 |
 | `User=redis-svc` / `Group=redis-svc` | 用低权限用户运行 Redis。 | Redis 进程不具备 root 权限，降低误操作和漏洞风险。 |
 | `RuntimeDirectory=redis` | 让 systemd 创建 `/run/redis`。 | PID 文件可以写入 `/run/redis/redis-6379.pid`。 |
+| `Environment=REDISCLI_AUTH=...` | 给 `ExecStop` 使用的 `redis-cli` 提供认证密码。 | 避免把密码直接写在停止命令参数里；学习环境可用，生产环境应使用更安全的凭据管理方式。 |
 | `ExecStart=...` | 定义 Redis 启动命令。 | systemd 会按这里的路径和配置文件启动 Redis。 |
 | `ExecStop=... shutdown` | 定义 Redis 停止命令。 | 停止服务时通过 `redis-cli` 让 Redis 正常退出，尽量保证持久化收尾。 |
 | `Restart=always` / `RestartSec=3` | Redis 异常退出后自动重启。 | 进程崩溃后 3 秒重启，适合服务托管。 |
@@ -984,7 +1008,7 @@ sudo ufw status
 如果启用了 `ufw`，放行 Redis 端口：
 
 ```bash
-sudo ufw allow 6379/tcp
+sudo ufw allow from 192.168.88.0/24 to any port 6379 proto tcp
 sudo ufw reload
 ```
 
@@ -992,7 +1016,7 @@ sudo ufw reload
 
 | 命令 | 为什么执行 | 执行后的影响 |
 | --- | --- | --- |
-| `sudo ufw allow 6379/tcp` | 允许外部访问 Redis 的 TCP 6379 端口。 | ufw 规则中会新增 6379/tcp 放行规则。 |
+| `sudo ufw allow from 192.168.88.0/24 to any port 6379 proto tcp` | 只允许 VMware NAT 学习网段访问 Redis 的 TCP 6379 端口。 | ufw 规则中会新增来源网段受限的 6379/tcp 放行规则，比直接对所有来源开放更安全。 |
 | `sudo ufw reload` | 重新加载 ufw 规则。 | 新增规则立即生效。 |
 
 学习环境中也可以暂时关闭 `ufw`，但你要知道生产环境不能这么做：
