@@ -1,3 +1,17 @@
+---
+title: 03-02-Redis-集群部署-VMware-Linux
+date: 2026-07-06 20:07:05
+description: Redis-集群部署-VMware-Linux
+tags:
+  - Redis
+categories:
+  - [Redis]
+sticky: 95
+realm: wujing
+home_rank: 95
+realm_rank: 95
+top_img: false
+---
 # Redis Cluster 部署：VMware + Ubuntu 22.04.5 + 六节点集群
 
 ## 1. 部署目标

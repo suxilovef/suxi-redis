@@ -1,3 +1,17 @@
+---
+title: 02-02-Redis-高可用部署-VMware-Linux
+date: 2026-07-06 20:07:05
+description: Redis-高可用部署-VMware-Linux
+tags:
+  - Redis
+categories:
+  - [Redis]
+sticky: 97
+realm: wujing
+home_rank: 97
+realm_rank: 97
+top_img: false
+---
 # Redis 高可用部署：VMware + Ubuntu 22.04.5 + Sentinel
 
 ## 1. 部署目标

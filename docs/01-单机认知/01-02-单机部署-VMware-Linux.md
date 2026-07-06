@@ -1,3 +1,17 @@
+---
+title: 01-02-Redis-单机部署-VMware-Linux
+date: 2026-07-06 20:07:05
+description: Redis-单机部署-VMware-Linux
+tags:
+  - Redis
+categories:
+  - [Redis]
+sticky: 99
+realm: wujing
+home_rank: 99
+realm_rank: 99
+top_img: false
+---
 # Redis 单机部署：VMware + Ubuntu 22.04.5
 
 ## 1. 部署目标
