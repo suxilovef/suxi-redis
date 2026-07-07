@@ -5,11 +5,10 @@ description: Redis-集群部署-VMware-Linux
 tags:
   - Redis
 categories:
-  - [Redis]
-sticky: 95
+  - Redis
 realm: wujing
-home_rank: 95
-realm_rank: 95
+cover: /image/post_cover/redis-cluster-deploy-min.svg
+rank: 79
 top_img: false
 ---
 # Redis Cluster 部署：VMware + Ubuntu 22.04.5 + 六节点集群

@@ -5,11 +5,10 @@ description: Redis-单机部署-VMware-Linux
 tags:
   - Redis
 categories:
-  - [Redis]
-sticky: 99
+  - Redis
 realm: wujing
-home_rank: 99
-realm_rank: 99
+cover: /image/post_cover/redis-standalone-deploy-min.svg
+rank: 89
 top_img: false
 ---
 # Redis 单机部署：VMware + Ubuntu 22.04.5

@@ -1,3 +1,16 @@
+---
+title: Redis七阶段学习路线
+date: 2026-07-06 20:07:05
+description: Redis七阶段学习路线
+tags:
+  - Redis
+categories:
+  - Redis
+realm: wujing
+cover: /image/post_cover/redis-7stage-roadmap-min.svg
+rank: 95
+top_img: false
+---
 # Redis 七阶段学习路线
 
 ## 1. 路线定位

@@ -5,11 +5,10 @@ description: Redis-高可用部署-VMware-Linux
 tags:
   - Redis
 categories:
-  - [Redis]
-sticky: 97
+  - Redis
 realm: wujing
-home_rank: 97
-realm_rank: 97
+cover: /image/post_cover/redis-ha-deploy-min.svg
+rank: 84
 top_img: false
 ---
 # Redis 高可用部署：VMware + Ubuntu 22.04.5 + Sentinel

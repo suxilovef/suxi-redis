@@ -5,11 +5,10 @@ description: Redis-线上问题排查与运维治理
 tags:
   - Redis
 categories:
-  - [Redis]
-sticky: 94
+  - Redis
 realm: wujing
-home_rank: 94
-realm_rank: 94
+cover: /image/post_cover/redis-ops-troubleshoot-min.svg
+rank: 75
 top_img: false
 ---
 # Redis 线上问题排查与运维治理
