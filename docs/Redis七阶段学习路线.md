@@ -7,7 +7,7 @@ tags:
 categories:
   - Redis
 realm: wujing
-cover: /image/post_cover/redis-7stage-roadmap-min.svg
+cover: /image/post_cover/wujing-redis-roadmap.svg
 rank: 95
 top_img: false
 ---

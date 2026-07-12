@@ -7,7 +7,7 @@ tags:
 categories:
   - Redis
 realm: wujing
-cover: /image/post_cover/redis-ops-troubleshoot-min.svg
+cover: /image/post_cover/wujing-redis-ops.svg
 rank: 75
 top_img: false
 ---
